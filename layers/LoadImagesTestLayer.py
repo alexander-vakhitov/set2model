@@ -20,7 +20,7 @@ class LoadImagesTestLayer(caffe.Layer):
         top[0].reshape(self.batch_size, self.im_shape[0], self.im_shape[1], self.im_shape[2])
         #label
         top[1].reshape(self.batch_size)
-        #query size
+        #data type
         top[2].reshape(1)
         #current group id
         top[3].reshape(1)
@@ -52,17 +52,14 @@ class LoadImagesTestLayer(caffe.Layer):
         self.is_finished = False
         self.group_id = 0
         self.item_id = 0
-
+        #data
         top[0].reshape(self.batch_size, self.im_shape[0], self.im_shape[1], self.im_shape[2])
-        #label
+        #labels
         top[1].reshape(self.batch_size)
-        #query size
+        #group
         top[2].reshape(1)
-        #current group id
+        #database (query or test)
         top[3].reshape(1)
-
-        # self.group_id = 75
-        # self.load_from_q_base = False
 
     def define_db_paths(self, db_dir):
         lmdb_db_path_q = db_dir + '/' + 'testq'
