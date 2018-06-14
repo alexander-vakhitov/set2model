@@ -1,19 +1,82 @@
 import caffe, numpy as np
 import theano.tensor as T
 from theano import function
+import theano
 import yaml
 import time
 import sklearn.mixture as mixture
-
+from theano.ifelse import ifelse
+from theano import gradient
 
 class HistLossLayer:
+    def setup_fields(self):
+        self.bin_num = 100
+        self.sample_num = self.sample_size
+        self.hmin = 0.0
+        self.hmax = 1.0
+        self.min_cov = 1e-6
+        self.reg_coef = 1e-5
+
+
     def __init__(self):
+        self.setup_fields()
         pass
+
+    def calc_min_max(self, p_n, p_p):
+        hminn = T.min(p_n)
+        hmaxn = T.max(p_n)
+        hminp = T.min(p_p)
+        hmaxp = T.max(p_p)
+        hmin = ifelse(T.lt(hminp,hminn), hminp, hminn)
+        hmax = ifelse(T.lt(hmaxp, hmaxn), hmaxn, hmaxp)
+        return hmax, hmin
+
+    def calc_hist_vals_vector_th(self, p, hmn, hmax):
+        sample_num = p.shape[0]
+        p_mat = T.tile(p.reshape((sample_num, 1)), (1, self.bin_num))
+        w = (hmax - hmn) / self.bin_num + self.min_cov
+        grid_vals = T.arange(0, self.bin_num)*(hmax-hmn)/self.bin_num+hmn+w/2.0
+        grid = T.tile(grid_vals, (sample_num, 1))
+        w_triang = 4 * w + self.min_cov
+        D = T._tensor_py_operators.__abs__(grid-p_mat)
+        mask = (D<=w_triang/2)
+        D_fin = w_triang * (D*(-2.0 / w_triang ** 2) + 1.0 / w_triang)*mask
+        hist_corr = T.sum(D_fin, 0)
+        return hist_corr
+
+    def hist_loss(self, hn, hp):
+        scan_result, scan_updates = theano.scan(fn = lambda ind, A: T.sum(A[0:ind+1]),
+                    outputs_info=None,
+                    sequences=T.arange(self.bin_num),
+                    non_sequences=hp)
+
+        # for i in range(1, self.bin_num):
+        #     agg_p.append(agg_p[i - 1] + hp[i])
+        agg_p = scan_result
+
+        L = T.sum(T.dot(agg_p, hn))
+
+        return L
+
+
+    def calc_hist_loss_vector(self, p_n, p_p):
+        # self.setup_fields()
+        hmax, hmin = self.calc_min_max(p_n, p_p)
+        hmin -= self.min_cov
+        hmax += self.min_cov
+
+        hp = self.calc_hist_vals_vector_th(p_p, hmin, hmax)
+
+        hn = self.calc_hist_vals_vector_th(p_n, hmin, hmax)
+        L = self.hist_loss(hn, hp)  # L = ifelse(T
+
+        return L, hmax, hmin, hn, hp
 
     def parse_input(self, bottom):
         self.all_labels = np.zeros_like(bottom[1].data)
         self.all_labels[...] = bottom[1].data[...]
         self.group_id = bottom[2].data[0]
+        # print 'group is '+str(self.group_id)
         p_lb = 0
         i = 0
         while (self.all_labels[i] == 1):
@@ -61,12 +124,6 @@ class GaussHistLossLayer(caffe.Layer, HistLossLayer):
         else:
             self.sample_size = 50
 
-        self.bin_num = 100
-        self.sample_num = self.sample_size
-        self.hmin = 0.0
-        self.hmax = 1.0
-        self.min_cov = 1e-6
-        self.reg_coef = 1e-5
 
         self.initialize_theano_fun()
 
@@ -111,6 +168,50 @@ class GMMContainer():
 
 class GMMHistLossLayer(caffe.Layer, HistLossLayer):
 
+    def calc_ll_gmm(self, Y, means, covars, weights):
+        n_samples, n_dim = Y.shape
+        lpr = (-0.5 * (n_dim * T.log(2 * np.pi) + T.sum(T.log(covars), 1)
+                      + T.sum((means ** 2) / covars, 1)
+                      - 2 * T.dot(Y, (means / covars).T)
+                      + T.dot(Y ** 2, T.transpose(1.0 / covars))) + T.log(weights))
+        lpr = T.transpose(lpr, (1,0))
+        # Use the max to normalize, as with the log this is what accumulates
+        # the less errors
+        vmax = T.max(lpr,axis=0)
+        out = T.log(T.sum(T.exp(lpr- vmax), axis=0))
+        out += vmax
+        responsibilities = T.exp(lpr - T.tile(out, (means.shape[0],1)))
+        return out, responsibilities, T.transpose(lpr)
+
+    def initialize_calc_ll_gmm_fun(self):
+        Yvec = T.dvector('Y')
+        meansvec = T.dvector('means')
+        covarsvec = T.dvector('covars')
+        weights = T.dvector('weights')
+        lam = T.dscalar('lambda')
+        ndim = meansvec.shape[0]/self.gm_num
+        Y = T.reshape(Yvec, (Yvec.shape[0]/ndim, ndim))
+        LL, p1, p2 = self.calc_ll_gmm(Y, T.reshape(meansvec, (self.gm_num, meansvec.shape[0]/self.gm_num)),
+                              T.reshape(covarsvec, (self.gm_num, meansvec.shape[0]/self.gm_num)),
+                              weights)
+        LL_lag = T.sum(LL)+lam*(T.sum(weights)-1)
+        LL_sum = T.sum(LL)
+        self.gmm_f = function([Yvec, meansvec, covarsvec, weights, lam], LL_lag)
+
+        LLg = gradient.jacobian(LL_lag, [Yvec, meansvec, covarsvec, weights, lam])
+
+        LL_sum_g = gradient.jacobian(LL_sum, [Yvec, meansvec, covarsvec, weights])
+
+        llhm = gradient.jacobian(LLg[1], [Yvec, meansvec, covarsvec, weights])
+        llhc = gradient.jacobian(LLg[2], [Yvec, meansvec, covarsvec, weights])
+        llhw = gradient.jacobian(LLg[3], [Yvec, meansvec, covarsvec, weights, lam])
+
+        self.gmm_df = function([Yvec, meansvec, covarsvec, weights], LL_sum_g)
+        self.gmm_hm = function([Yvec, meansvec, covarsvec, weights, lam], llhm)
+        self.gmm_hc = function([Yvec, meansvec, covarsvec, weights, lam], llhc)
+        self.gmm_hw = function([Yvec, meansvec, covarsvec, weights, lam], llhw)
+
+
     def initialize_calc_ll_gmm_hist_fun(self):
         meansvec = T.dvector('means')
         covarsvec = T.dvector('covars')
@@ -143,6 +244,7 @@ class GMMHistLossLayer(caffe.Layer, HistLossLayer):
         self.min_cov = 1e-6
         self.reg_coef = 1e-5
         self.initialize_calc_ll_gmm_hist_fun()
+        self.initialize_calc_ll_gmm_fun()
         self.gmm_dict = {}
         self.scaling_coeff = 0.00005
 
@@ -151,6 +253,7 @@ class GMMHistLossLayer(caffe.Layer, HistLossLayer):
 
 
     def build_gmm(self, X, n_it = 1000, min_cov = 0.01):
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
         gmm = mixture.GMM(covariance_type='diag', init_params='wmc', min_covar=min_cov,
                     n_components=self.gm_num, n_init=1, n_iter=n_it, params='wmc',
                     random_state=None)
@@ -175,13 +278,16 @@ class GMMHistLossLayer(caffe.Layer, HistLossLayer):
     def forward(self, bottom, top):
         self.parse_input(bottom)
         gmm_data = []
+        # print 'fwd gid='+str(self.group_id)
         if self.group_id in self.gmm_dict:
             gmm_data = self.gmm_dict[self.group_id]
         else:
             if (self.gm_num > 0):
+                # print 'gm_num: '+str(self.gm_num)
                 [means, covars, weights, score] = self.build_gmm(self.query_descs)
                 gmm_data = GMMContainer(means, covars, weights)
             else:
+                # print 'gm_num non-positive '
                 [means, covars, weights, score] = self.build_adagmm(self.query_descs)
                 gmm_data = GMMContainer(means, covars, weights)
 

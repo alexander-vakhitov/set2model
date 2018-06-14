@@ -1,10 +1,5 @@
-import caffe, lmdb, numpy as np, yaml
-import Debugger as dbg
+import caffe, numpy as np, yaml
 import loader
-import os
-import cv2
-
-import RandomRotationLayer as rrl
 
 class LoadImagesTestLayer(caffe.Layer):
 
@@ -24,10 +19,6 @@ class LoadImagesTestLayer(caffe.Layer):
         top[2].reshape(1)
         #current group id
         top[3].reshape(1)
-        print 'reshape done '
-
-
-
 
     def setup(self, bottom, top):
 
@@ -75,7 +66,7 @@ class LoadImagesTestLayer(caffe.Layer):
         if (self.is_finished):
             top[0].data[...] = np.zeros_like(top[0].data)
             top[1].data[...] = -1*np.ones_like(top[1].data)
-            top[2].data[...] = np.zeros_like(top[2].data)
+            top[2].data[...] = -1*np.ones_like(top[2].data)
             top[3].data[...] = np.zeros_like(top[3].data)
             return
 
@@ -116,18 +107,6 @@ class LoadImagesTestLayer(caffe.Layer):
                 self.load_from_q_base = False
             else:
                 self.is_finished = True
-
-        # f_out = open('/home/avakhitov/testloadlog.txt', 'a')
-        # stage = 'q'
-        # if (not self.load_from_q_base):
-        #     stage = 't'
-        # f_out.write('cur ' + str(self.group_id) + ' '+stage + ' \n')
-        # f_out.close()
-        #
-        # f_out = open('/home/avakhitov/testloadlog.txt', 'a')
-        # f_out.write('written '+str(self.group_id)+'\n')
-        # f_out.close()
-
 
     def update_counters(self, all_imgs):
         do_switch_db = False
@@ -187,7 +166,7 @@ class LoadImagesTestOmniglotLayer(caffe.Layer):
         if (self.is_finished):
             top[0].data[...] = np.zeros_like(top[0].data)
             top[1].data[...] = -1 * np.ones_like(top[1].data)
-            top[2].data[...] = np.zeros_like(top[2].data)
+            top[2].data[...] = -1*np.ones_like(top[2].data)
             top[3].data[:] = np.ones_like(top[3].data)
             return
 

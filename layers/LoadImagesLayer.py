@@ -9,15 +9,13 @@ class LoadImagesLayer(caffe.Layer):
     def check_params(self, params):
         #assert 'split' in params.keys(), 'Params must include split (train, val, or test).'
         required = ['db_dir', 'im_shape', 'max_query_size',
-                    'pos_test_num', 'neg_test_num', 'do_load_negs', 'q_path', 't_path', 'group_cnt']
+                    'pos_test_num', 'neg_test_num',  'q_path', 't_path', 'group_cnt']
         for r in required:
             assert r in params.keys(), 'Params must include {}'.format(r)
 
 
 
     def setup(self, bottom, top):
-
-        self.top_names = ['data', 'label', 'query_size']
         # params is a python dictionary with layer parameters.
         params = yaml.load(self.param_str)
         # Check the paramameters for validity.
@@ -39,11 +37,7 @@ class LoadImagesLayer(caffe.Layer):
         self.q_loader = loader.Loader(lmdb_db_path_q, meta_db_path_q, caffe_root, self.im_shape[1], filterQFile=self.filterQFile)
         self.q_loader.set_group_cnt(self.group_cnt)
 
-        if params['do_load_negs']:
-            self.t_loader = loader.Loader(lmdb_db_path_t, meta_db_path_t, caffe_root, self.im_shape[1], do_load_stats=True)
-            self.t_loader.load_stats(params['q_path'], params['t_path'], params['group_cnt'])
-        else:
-            self.t_loader = loader.Loader(lmdb_db_path_t, meta_db_path_t, caffe_root, self.im_shape[1])
+        self.t_loader = loader.Loader(lmdb_db_path_t, meta_db_path_t, caffe_root, self.im_shape[1])
 
         self.t_loader.set_group_cnt(self.group_cnt)
 
@@ -53,10 +47,8 @@ class LoadImagesLayer(caffe.Layer):
         top[0].reshape(self.batch_size, self.im_shape[0], self.im_shape[1], self.im_shape[2])
         #label
         top[1].reshape(self.batch_size)
-        #query size
-        top[2].reshape(1)
         #current group id
-        top[3].reshape(1)
+        top[2].reshape(1)
 
     def define_db_names(self, db_dir):
         lmdb_db_path_q = db_dir + '/' + 'testq'
@@ -86,6 +78,7 @@ class LoadImagesLayer(caffe.Layer):
         for i in range(0, len(t_coll_pos)):
             top[0].data[i, :, :, :] = t_coll_pos[i]
             top[1].data[i] = 1
+
         for i in range(len(t_coll_pos), self.pos_test_num):
             top[0].data[i, :, :, :] = np.zeros((self.im_shape[0], self.im_shape[1], self.im_shape[2]))
             top[1].data[i] = -1
@@ -112,7 +105,9 @@ class LoadImagesLayer(caffe.Layer):
             top[0].data[i+test_shift, ...] = np.zeros((self.im_shape[0], self.im_shape[1], self.im_shape[2]))
             top[1].data[i+test_shift, ...] = -1
 
-        top[3].data[0] = rand_group_id
+        # print 'load pos '+str(np.linalg.norm(top[0].data[0, :, :, :]))
+
+        top[2].data[0] = rand_group_id
 
 
     def reshape(self, bottom, top):

@@ -1,11 +1,8 @@
 import caffe, numpy as np
-import Debugger as dbg
 
 class ActNormLayer(caffe.Layer):
 
-
     def setup(self, bottom, top):
-
         pass
 
     def reshape(self, bottom, top):
@@ -13,16 +10,15 @@ class ActNormLayer(caffe.Layer):
 
 
     def forward(self, bottom, top):
-
-        # dbg.log_forward('act_norm', bottom)
-
+        # print 'load pos fin ' + str(np.linalg.norm(bottom[0].data[:]))
         self.norms = []
         for j in range(0, bottom[0].data.shape[0]):
-            self.norms.append(np.linalg.norm(bottom[0].data[j, :].reshape(-1)) + 1e-5)
+            self.norms.append(np.linalg.norm(bottom[0].data[j, :].reshape(-1)) + 1e-15)
+            # print 'act norm ' + str(np.linalg.norm(bottom[0].data))
             top[0].data[j, :] = bottom[0].data[j, :].reshape(bottom[0].data.shape[1]) / self.norms[j]
 
 
-
+        # print 'norms 0 '+str(self.norms[0])
 
     def backward(self, top, propagate_down, bottom):
         bottom_desc_shape = bottom[0].shape[1:]

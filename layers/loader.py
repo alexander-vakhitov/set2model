@@ -1,9 +1,6 @@
 import caffe, lmdb, numpy as np, time
-#import run_caffe.full_loss_computer as flc
-import models.gauss_ll as gll
-import object_base_reader as obr
 
-class MetaLoader():
+class MetaLoader:
 
     def __init__(self, loader, class_num, class_in_batch_num, test_samples_per_class_num, train_samples_per_class_num):
         self.loader = loader
@@ -44,7 +41,7 @@ class MetaLoader():
         # self.test_batch = self.prepare_batch(self.class_ids, self.test_samples_per_class)
         return self.test_batch
 
-class Loader():
+class Loader:
 
     def __init__(self, db_path, metadb_path, caffe_root, imside, do_load_stats = False, filterQFile = ''):
         f_in = open(metadb_path, 'r')
@@ -99,35 +96,6 @@ class Loader():
     def set_group_cnt(self, group_cnt):
         self.group_to_image = self.group_to_image[0:group_cnt]
         self.get_max_id()
-
-
-
-    def load_stats(self, q_path, t_path, group_cnt):
-        # qd_lst, td_lst = flc.load_descriptors(q_path, t_path, group_cnt)
-        # self.find_negs(qd_lst, td_lst)
-        pass
-
-
-    def find_negs(self, qd_lst, td_lst):
-        N = 50
-        self.neg_chosen = []
-        for qi in range(0, len(qd_lst)):
-            glm = gll.GaussLLModel()
-            glm.build_model(qd_lst[qi])
-            all_dists = []
-            for ti in range(0, len(td_lst)):
-                if (qi == ti):
-                    continue
-                dists = glm.calc_ll(td_lst[ti])
-                for di in range(0, len(dists)):
-                    all_dists.append([dists[di], ti, di])
-
-            all_d_m = obr.list2mat(all_dists)
-            all_d_srt_inds = np.argsort(all_d_m[:, 0])
-            chinds = all_d_srt_inds[-N:]
-            chosen = all_d_m[chinds, 1:3]
-            chosen_dists = all_d_m[all_d_srt_inds[-N:], 0]
-            self.neg_chosen.append(chosen)
 
 
     def choose_N_from_list(self, N, perm_ids, w_rep = False):

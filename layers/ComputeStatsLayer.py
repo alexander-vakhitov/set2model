@@ -1,6 +1,24 @@
 import caffe, yaml, os, numpy as np
 import sklearn
 import sklearn.mixture as mixture
+import warnings
+
+class Mean_RM:
+    def __init__(self):
+        pass
+
+    def set_query(self, descs):
+        self.means = np.mean(descs, 0)
+
+    def get_ranks(self, X):
+        M = np.tile(self.means, (X.shape[0], 1))
+        d = (M-X)**2
+        d = np.sum(d, 1)
+        d = np.sqrt(d)
+        return -d
+
+    def get_query_mode(self):
+        return 0
 
 
 class GMM_RM:
@@ -78,6 +96,10 @@ class ComputeStatsLayer(caffe.Layer):
         self.report_done = False
         self.q_descs = {}
         self.t_descs = {}
+        self.t_path = params['t_path']
+        self.q_path = params['q_path']
+
+        self.fin_loss = 0
 
     def make_one_query(self, i, q_for_group, ranking_model, t_descs, pos_t_for_group=np.zeros(1)):
         ranking_model.set_query(q_for_group)
@@ -116,45 +138,71 @@ class ComputeStatsLayer(caffe.Layer):
             ap = sklearn.metrics.average_precision_score(y_true, y_score)
             aps.append(ap)
 
-    def report_results(self):
+    def compute_results(self):
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
         q_descs_lst = []
         t_descs_lst = []
         for gi in range(0, len(self.q_descs)):
+            # for d in self.q_descs[gi]:
+            #     for i in range(0, d.shape[0]):
+            #         print d[i, 0]
             desc_mat = np.concatenate(self.q_descs[gi])
+            # for i in range(0, desc_mat.shape[0]):
+            #     print desc_mat[i, 0]
             q_descs_lst.append(desc_mat)
+
+            dir_path = self.q_path + '/' + str(gi)+'/'
+            if not os.path.exists(dir_path):
+                os.makedirs(dir_path)
+            np.save(dir_path + '0.npy', desc_mat)
+
             desc_mat = np.concatenate(self.t_descs[gi])
             t_descs_lst.append(desc_mat)
-        grm = GMM_RM(self.gm_num)
+
+            dir_path = self.t_path + '/' + str(gi) + '/'
+            if not os.path.exists(dir_path):
+                os.makedirs(dir_path)
+            np.save(dir_path + '0.npy', desc_mat)
+
+        if self.gm_num>0:
+            grm = GMM_RM(self.gm_num)
+        else:
+            grm = Mean_RM()
         l_max = np.min([len(self.q_descs), len(self.t_descs)])
         aps = []
         for i in range(0, l_max):  # len(q_descs)):
-            q_for_group = self.q_descs[i]
-            all_labels, all_ranks, tot_len = self.make_one_query(i, q_for_group, grm, self.t_descs)
+            q_for_group = q_descs_lst[i]
+            all_labels, all_ranks, tot_len = self.make_one_query(i, q_for_group, grm, t_descs_lst)
             self.compute_ap(all_labels, all_ranks, aps, tot_len)
-        print 'mAP = ' + str(np.mean(aps))
+        mAP = np.mean(aps)
+        print 'mAP = ' + str(mAP)
+        self.fin_loss = mAP
 
 
     def forward(self, bottom, top):
 
         top[0].data[0] = 1.0
+        group_id = bottom[2].data[0]
 
         cnt = 0
         for i in range(0, bottom[1].data.shape[0]):
             if (bottom[1].data[i] >= 0):
                 cnt += 1
 
-        if (cnt == 0):
+        if group_id < 0:
             if not self.report_done:
-                self.report_results()
+                self.compute_results()
                 self.report_done = True
-            top[0].data[0] = 0.0
+            top[0].data[0] = self.fin_loss
             return
 
-        desc_data = bottom[0].data[0:cnt, ...]
-        group_id = bottom[2].data[0]
+        desc_data = np.copy(bottom[0].data[0:cnt, ...])
+
+        # print 'cnt= ' + str(cnt) +' norm data = '+str(np.linalg.norm(desc_data))
+
         data_type = bottom[3].data[0]
 
-        if (data_type == 1):
+        if data_type == 1:
             #query base
             if not (group_id in self.q_descs):
                 self.q_descs[group_id] = []
@@ -163,14 +211,6 @@ class ComputeStatsLayer(caffe.Layer):
             if not (group_id in self.t_descs):
                 self.t_descs[group_id] = []
             self.t_descs[group_id].append(desc_data)
-
-
-
-    def save_descs_to_fldr(self, desc_data, save_fldr):
-        if (not os.path.exists(save_fldr)):
-            os.makedirs(save_fldr)
-        fcnt = len(os.listdir(save_fldr))
-        np.save(save_fldr + '/' + str(fcnt) + '.npy', desc_data)
 
     def backward(self, top, propagate_down, bottom):
         pass
