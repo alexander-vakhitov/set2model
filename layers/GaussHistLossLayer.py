@@ -7,20 +7,10 @@ import time
 import sklearn.mixture as mixture
 from theano.ifelse import ifelse
 from theano import gradient
+import warnings
 
-class HistLossLayer:
-    def setup_fields(self):
-        self.bin_num = 100
-        self.sample_num = self.sample_size
-        self.hmin = 0.0
-        self.hmax = 1.0
-        self.min_cov = 1e-6
-        self.reg_coef = 1e-5
-
-
-    def __init__(self):
-        self.setup_fields()
-        pass
+#Base class for the loss function layer
+class HistLossLayer(caffe.Layer):
 
     def calc_min_max(self, p_n, p_p):
         hminn = T.min(p_n)
@@ -31,6 +21,7 @@ class HistLossLayer:
         hmax = ifelse(T.lt(hmaxp, hmaxn), hmaxn, hmaxp)
         return hmax, hmin
 
+    #Calculate a histogram of values from the vector p in the interval (hmn, hmax)
     def calc_hist_vals_vector_th(self, p, hmn, hmax):
         sample_num = p.shape[0]
         p_mat = T.tile(p.reshape((sample_num, 1)), (1, self.bin_num))
@@ -44,39 +35,36 @@ class HistLossLayer:
         hist_corr = T.sum(D_fin, 0)
         return hist_corr
 
+    #Calculate the histogram loss
     def hist_loss(self, hn, hp):
         scan_result, scan_updates = theano.scan(fn = lambda ind, A: T.sum(A[0:ind+1]),
                     outputs_info=None,
                     sequences=T.arange(self.bin_num),
                     non_sequences=hp)
 
-        # for i in range(1, self.bin_num):
-        #     agg_p.append(agg_p[i - 1] + hp[i])
         agg_p = scan_result
 
         L = T.sum(T.dot(agg_p, hn))
 
         return L
 
-
+    #Compute the histograms and the histogram loss
     def calc_hist_loss_vector(self, p_n, p_p):
         # self.setup_fields()
         hmax, hmin = self.calc_min_max(p_n, p_p)
         hmin -= self.min_cov
         hmax += self.min_cov
-
         hp = self.calc_hist_vals_vector_th(p_p, hmin, hmax)
-
         hn = self.calc_hist_vals_vector_th(p_n, hmin, hmax)
         L = self.hist_loss(hn, hp)  # L = ifelse(T
 
         return L, hmax, hmin, hn, hp
 
+    #extract concept-defining, positive and negative examples
     def parse_input(self, bottom):
         self.all_labels = np.zeros_like(bottom[1].data)
         self.all_labels[...] = bottom[1].data[...]
         self.group_id = bottom[2].data[0]
-        # print 'group is '+str(self.group_id)
         p_lb = 0
         i = 0
         while (self.all_labels[i] == 1):
@@ -101,8 +89,56 @@ class HistLossLayer:
         self.pos_descs = bottom[0].data[self.pos_bnds[0]:self.pos_bnds[1], :]
         self.neg_descs = bottom[0].data[self.neg_bnds[0]:self.neg_bnds[1], :]
 
+    #initialize constants to be used in histogram loss computation
+    def setup_fields(self):
+        self.bin_num = 100
+        self.hmin = 0.0
+        self.hmax = 1.0
+        self.min_cov = 1e-6
+        self.reg_coef = 1e-5
 
-class GaussHistLossLayer(caffe.Layer, HistLossLayer):
+
+    def setup(self, bottom, top):
+        self.sample_size = 50
+        self.setup_fields()
+
+    def reshape(self, bottom, top):
+        pass
+
+
+    def forward(self, bottom, top):
+        self.parse_input(bottom)
+        pass
+
+
+    def backward(self, top, propagate_down, bottom):
+        self.parse_input(bottom)
+        pass
+
+
+#Layer including Set2Model-Gauss and histogram loss
+class GaussHistLossLayer(HistLossLayer):
+
+    def build_gauss_model_theano(self, X):
+        mean = T.mean(X, 0)
+        Xc = X - T.tile(mean, (X.shape[0], 1))
+        covs = T.sum(Xc ** 2, 0) / Xc.shape[0] + self.min_cov
+        return mean, covs
+
+    def calc_log_gauss_fun_theano(self, Y, mean, covs):
+        n_samples, n_dim = Y.shape
+        Yc = Y - T.tile(mean, (Y.shape[0], 1))
+        exp_val = -0.5*T.sum(Yc**2/T.tile(covs, (Y.shape[0], 1)),1)
+        norm_scal = -0.5*T.log(2*np.pi)*n_dim-0.5*T.sum(T.log(covs))
+        return exp_val+norm_scal
+
+    def calc_hist_loss_gauss_vector(self, X, Yp, Yn):
+        mean, covs = self.build_gauss_model_theano(X)
+        p_p = self.calc_log_gauss_fun_theano(Yp, mean, covs)
+        p_n = self.calc_log_gauss_fun_theano(Yn, mean, covs)
+        L, hmax, hmin, hn, hp = self.calc_hist_loss_vector(p_n, p_p)
+        return L, hp, hn, hmax, hmin
+
 
     def initialize_theano_fun(self):
         X = T.fmatrix('X')
@@ -115,48 +151,35 @@ class GaussHistLossLayer(caffe.Layer, HistLossLayer):
         gf = T.grad(L, [X, Yp, Yn])
         self.df = function([X, Yp, Yn], gf, allow_input_downcast=True)
 
-        return
 
     def setup(self, bottom, top):
+        super(GaussHistLossLayer,self).setup(bottom, top)
         self.params = yaml.load(self.param_str)
-        if ('sample_size' in self.params.keys()):
-            self.sample_size = self.params['sample_size']
-        else:
-            self.sample_size = 50
-
-
         self.initialize_theano_fun()
-
         self.scaling_coeff = 0.00005
         self.cnt = 0
 
     def reshape(self, bottom, top):
+        super(GaussHistLossLayer, self).reshape(bottom, top)
         top[0].reshape(1)
 
 
     def forward(self, bottom, top):
-        self.parse_input(bottom)
+        super(GaussHistLossLayer, self).forward(bottom, top)
         [Lval, hp, hn, hmax, hmin] = self.f(self.query_descs, self.pos_descs, self.neg_descs)
         top[0].data[0] = self.scaling_coeff*Lval
 
 
     def backward(self, top, propagate_down, bottom):
-        s1 = time.time()
-        self.parse_input(bottom)
-
+        super(GaussHistLossLayer, self).backward(top, propagate_down, bottom)
         dL = self.df(self.query_descs, self.pos_descs, self.neg_descs)
-
         if (propagate_down[0]):
             bottom[0].diff[self.q_bnds[0]:self.q_bnds[1], :] = self.scaling_coeff*dL[0]
             bottom[0].diff[self.pos_bnds[0]:self.pos_bnds[1], :] = self.scaling_coeff*dL[1]
             bottom[0].diff[self.neg_bnds[0]:self.neg_bnds[1], :] = self.scaling_coeff*dL[2]
-
-        bottom[1].diff[...] = np.zeros_like(bottom[1].diff)
-        bottom[2].diff[...] = np.zeros_like(bottom[2].diff)
-        bottom[3].diff[...] = np.zeros_like(bottom[3].diff)
         self.cnt += 1
 
-
+#GMM parameters structure
 class GMMContainer():
 
     def __init__(self, means, covars, weights):
@@ -165,8 +188,8 @@ class GMMContainer():
         self.weights = weights
         self.cnt = 0
 
-
-class GMMHistLossLayer(caffe.Layer, HistLossLayer):
+#Layer including Set2Model-GMMX for X = 2..4 and Histogram Loss
+class GMMHistLossLayer(HistLossLayer):
 
     def calc_ll_gmm(self, Y, means, covars, weights):
         n_samples, n_dim = Y.shape
@@ -230,25 +253,16 @@ class GMMHistLossLayer(caffe.Layer, HistLossLayer):
         self.gmmhist_f = function([meansvec, covarsvec, weights, Yp, Yn], [L, hmax, hmin, hn, hp], allow_input_downcast=True)
 
     def setup(self, bottom, top):
+        super(GMMHistLossLayer, self).setup(bottom, top)
         self.params = yaml.load(self.param_str)
         self.gm_num = self.params['gm_num']
-        if ('sample_size' in self.params.keys()):
-            self.sample_size = self.params['sample_size']
-        else:
-            self.sample_size = 50
-
-        self.bin_num = 100
-        self.sample_num = self.sample_size
-        self.hmin = 0.0
-        self.hmax = 1.0
-        self.min_cov = 1e-6
-        self.reg_coef = 1e-5
         self.initialize_calc_ll_gmm_hist_fun()
         self.initialize_calc_ll_gmm_fun()
         self.gmm_dict = {}
         self.scaling_coeff = 0.00005
 
     def reshape(self, bottom, top):
+        super(GMMHistLossLayer, self).reshape(bottom, top)
         top[0].reshape(1)
 
 
@@ -276,9 +290,8 @@ class GMMHistLossLayer(caffe.Layer, HistLossLayer):
 
 
     def forward(self, bottom, top):
-        self.parse_input(bottom)
+        super(GMMHistLossLayer, self).forward(bottom, top)
         gmm_data = []
-        # print 'fwd gid='+str(self.group_id)
         if self.group_id in self.gmm_dict:
             gmm_data = self.gmm_dict[self.group_id]
         else:
@@ -290,7 +303,6 @@ class GMMHistLossLayer(caffe.Layer, HistLossLayer):
                 # print 'gm_num non-positive '
                 [means, covars, weights, score] = self.build_adagmm(self.query_descs)
                 gmm_data = GMMContainer(means, covars, weights)
-
         [means, covars, weights] = self.refine_gmm(self.query_descs, gmm_data.means, gmm_data.covars, gmm_data.weights)
         gmm_data.means = means
         gmm_data.covars = covars
@@ -313,6 +325,7 @@ class GMMHistLossLayer(caffe.Layer, HistLossLayer):
         dXf = (df_vec).dot(dX[0:dX.shape[0]-1, :])
         return df[3], df[4], dXf
 
+    #procedure to  differentiate through the fitting process by solving a linear system
     def solve_lin_sys_for_gmm(self, Xvec, meansvec, covarsvec, weights):
         gm_num = len(weights)
         n_dim = len(meansvec)/len(weights)
@@ -392,8 +405,7 @@ class GMMHistLossLayer(caffe.Layer, HistLossLayer):
 
 
     def backward(self, top, propagate_down, bottom):
-
-        self.parse_input(bottom)
+        super(GMMHistLossLayer, self).backward(top, propagate_down, bottom)
         dYp, dYn, dX = self.calc_gmm_probs_dif(self.query_descs, self.pos_descs, self.neg_descs, self.meansvec, self.covsvec, self.weights)
         dX = np.reshape(dX, self.query_descs.shape)
         if (propagate_down[0]):

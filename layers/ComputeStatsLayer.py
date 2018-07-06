@@ -96,8 +96,8 @@ class ComputeStatsLayer(caffe.Layer):
         self.report_done = False
         self.q_descs = {}
         self.t_descs = {}
-        self.t_path = params['t_path']
-        self.q_path = params['q_path']
+        # self.t_path = params['t_path']
+        # self.q_path = params['q_path']
 
         self.fin_loss = 0
 
@@ -143,26 +143,21 @@ class ComputeStatsLayer(caffe.Layer):
         q_descs_lst = []
         t_descs_lst = []
         for gi in range(0, len(self.q_descs)):
-            # for d in self.q_descs[gi]:
-            #     for i in range(0, d.shape[0]):
-            #         print d[i, 0]
             desc_mat = np.concatenate(self.q_descs[gi])
-            # for i in range(0, desc_mat.shape[0]):
-            #     print desc_mat[i, 0]
             q_descs_lst.append(desc_mat)
 
-            dir_path = self.q_path + '/' + str(gi)+'/'
-            if not os.path.exists(dir_path):
-                os.makedirs(dir_path)
-            np.save(dir_path + '0.npy', desc_mat)
-
-            desc_mat = np.concatenate(self.t_descs[gi])
-            t_descs_lst.append(desc_mat)
-
-            dir_path = self.t_path + '/' + str(gi) + '/'
-            if not os.path.exists(dir_path):
-                os.makedirs(dir_path)
-            np.save(dir_path + '0.npy', desc_mat)
+            # dir_path = self.q_path + '/' + str(gi)+'/'
+            # if not os.path.exists(dir_path):
+            #     os.makedirs(dir_path)
+            # np.save(dir_path + '0.npy', desc_mat)
+            #
+            # desc_mat = np.concatenate(self.t_descs[gi])
+            # t_descs_lst.append(desc_mat)
+            #
+            # dir_path = self.t_path + '/' + str(gi) + '/'
+            # if not os.path.exists(dir_path):
+            #     os.makedirs(dir_path)
+            # np.save(dir_path + '0.npy', desc_mat)
 
         if self.gm_num>0:
             grm = GMM_RM(self.gm_num)

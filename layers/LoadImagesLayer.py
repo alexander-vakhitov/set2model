@@ -9,7 +9,7 @@ class LoadImagesLayer(caffe.Layer):
     def check_params(self, params):
         #assert 'split' in params.keys(), 'Params must include split (train, val, or test).'
         required = ['db_dir', 'im_shape', 'max_query_size',
-                    'pos_test_num', 'neg_test_num',  'q_path', 't_path', 'group_cnt']
+                    'pos_test_num', 'neg_test_num',  'group_cnt']
         for r in required:
             assert r in params.keys(), 'Params must include {}'.format(r)
 
